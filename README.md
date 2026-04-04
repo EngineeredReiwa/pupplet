@@ -171,6 +171,10 @@ Built-in delays follow XActions' patterns:
 - Comments: 30-60s delay (X is strict on comments)
 - Every 5 comments: 2-3min pause
 
+## Credits
+
+DOM selectors, rate limit patterns, and automation flows are heavily inspired by [XActions](https://github.com/nirholas/XActions) by [@nichxbt](https://x.com/nichxbt). XActions is a full-featured X automation toolkit built on Puppeteer — go check it out if you want the batteries-included version.
+
 ## License
 
 MIT

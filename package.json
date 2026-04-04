@@ -1,15 +1,15 @@
 {
-  "name": "x-puppet",
-  "version": "0.1.0",
-  "description": "X/Twitter DOM automation via Chrome DevTools Protocol. No API key needed.",
+  "name": "puppet",
+  "version": "0.2.0",
+  "description": "Multi-platform DOM automation via Chrome DevTools Protocol. No API keys needed.",
   "main": "index.js",
   "bin": {
-    "x-puppet": "./index.js"
+    "puppet": "./index.js"
   },
   "scripts": {
     "start": "node index.js"
   },
-  "keywords": ["twitter", "x", "automation", "cdp", "dom"],
+  "keywords": ["twitter", "x", "reddit", "automation", "cdp", "dom", "social-media"],
   "license": "MIT",
   "dependencies": {
     "chrome-remote-interface": "^0.34.0"
