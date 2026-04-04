@@ -1,26 +1,24 @@
-# x-puppet
+# puppet
 
-X/Twitter DOM automation via Chrome DevTools Protocol.
-No API key. No Puppeteer. No new browser. Just your Chrome.
+Multi-platform DOM automation via Chrome DevTools Protocol.
+No API keys. No Puppeteer. No new browser. Just your Chrome.
 
-## What is this?
+## Supported Platforms
 
-A lightweight CLI that automates X (Twitter) by controlling your own Chrome browser through CDP (Chrome DevTools Protocol). It uses the same DOM selectors as [XActions](https://github.com/nirholas/XActions), but without Puppeteer, without launching a new browser, and without any detection risk.
-
-```
-XActions: 58,000 lines, 35 dependencies, 118MB, Puppeteer, new Chromium instance
-x-puppet: 550 lines, 1 dependency, 100KB, CDP direct, YOUR Chrome
-```
+| Platform | Read | Actions | Method |
+|----------|------|---------|--------|
+| **X / Twitter** | Timeline, profile, search, followers | Tweet, like, reply, follow | DOM |
+| **Reddit** | Feed, search, post detail, comments | Upvote, downvote | DOM + JSON API |
 
 ## Why?
 
-| | Official API | XActions (Puppeteer) | x-puppet (CDP) |
+| | Official API | Puppeteer | puppet (CDP) |
 |---|---|---|---|
-| Cost | $100/mo | Free | Free |
+| Cost | $100/mo+ | Free | Free |
 | Browser | N/A | New Chromium | **Your Chrome** |
-| Login | OAuth | Cookie management | **Already logged in** |
+| Login | OAuth / tokens | Cookie management | **Already logged in** |
 | Detection risk | None | Stealth plugin needed | **None (you ARE the user)** |
-| Dependencies | API SDK | 35 packages | **1 package** |
+| Dependencies | API SDK | 35+ packages | **1 package** |
 
 ## Quick Start
 
@@ -30,15 +28,15 @@ x-puppet: 550 lines, 1 dependency, 100KB, CDP direct, YOUR Chrome
 # Quit Chrome first (Cmd+Q), then:
 /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
   --remote-debugging-port=9222 \
-  --user-data-dir="$HOME/.x-puppet-chrome"
+  --user-data-dir="$HOME/.puppet-chrome"
 ```
 
-> First time? Log into X manually in this Chrome window. Cookie persists after that.
+> First time? Log into X / Reddit manually in this Chrome window. Sessions persist.
 
 ### 2. Install
 
 ```bash
-git clone https://github.com/user/x-puppet.git
+git clone https://github.com/EngineeredReiwa/x-puppet.git
 cd x-puppet
 npm install
 ```
@@ -46,66 +44,59 @@ npm install
 ### 3. Use
 
 ```bash
-# Post a tweet
-node index.js tweet "Hello from x-puppet!"
+# --- Reddit ---
+node puppet.js reddit feed 20 javascript    # r/javascript の投稿20件
+node puppet.js reddit search "book" 10      # "book" で検索
+node puppet.js reddit read 0                # 投稿詳細 + コメント
+node puppet.js reddit upvote 0              # upvote
+node puppet.js reddit navigate books        # r/books に移動
 
-# Like the first tweet on your timeline
-node index.js like
-
-# Read your timeline
-node index.js timeline
-
-# Search tweets
-node index.js search "Kindle NotebookLM" 5
-
-# Get someone's profile
-node index.js profile elonmusk
-
-# Auto-like tweets matching a query
-node index.js auto-like "AI reading" 10
-
-# Read notifications
-node index.js notifications
+# --- X / Twitter ---
+node puppet.js x timeline 5                 # タイムライン
+node puppet.js x tweet "Hello!"             # ツイート
+node puppet.js x like 0                     # いいね
 ```
 
-## All Commands
+## Commands
 
-### Actions
+### puppet reddit
+
+| Command | Description |
+|---------|-------------|
+| `feed [limit] [subreddit]` | Feed posts. With subreddit: JSON API (pagination, 100+ OK). Without: DOM (current page) |
+| `search <query> [limit]` | Search posts across Reddit |
+| `read [index]` | Post detail + top 20 comments (from DOM index) |
+| `detail <permalink>` | Post detail by permalink |
+| `upvote [index]` | Upvote post (Shadow DOM click) |
+| `downvote [index]` | Downvote post (Shadow DOM click) |
+| `navigate <subreddit>` | Navigate to subreddit |
+| `eval <js>` | Execute JS on page |
+
+### puppet x
+
 | Command | Description |
 |---------|-------------|
 | `tweet <text>` | Post a tweet |
-| `like [index]` | Like tweet at index (default: 0) |
+| `like [index]` | Like tweet at index |
 | `unlike [index]` | Unlike tweet |
 | `reply <text> [index]` | Reply to tweet |
-| `follow <username>` | Follow a user |
-| `unfollow <username>` | Unfollow a user |
-
-### Scraping
-| Command | Description |
-|---------|-------------|
-| `timeline [limit]` | Read your timeline |
 | `notifications [limit]` | Read notifications |
-| `profile <username>` | Get user profile |
-| `tweets <username> [limit]` | Get user's tweets |
-| `tweet-detail <tweetId>` | Get tweet details |
-| `followers <username> [limit]` | List followers |
-| `following <username> [limit]` | List following |
-| `search <query> [limit]` | Search tweets |
-
-### Automation
-| Command | Description |
-|---------|-------------|
-| `auto-like <query> [max]` | Auto-like search results |
-| `auto-like-user <username> [max]` | Auto-like user's tweets |
-| `auto-comment <query> <comment>` | Auto-comment on search results |
-| `keyword-follow <query> [max]` | Follow users from search |
-| `unfollow-non-followers <username>` | Unfollow non-followers |
-
-### Other
-| Command | Description |
-|---------|-------------|
+| `timeline [limit]` | Read timeline |
 | `navigate <path>` | Go to x.com/\<path\> |
-| `eval <js>` | Execute JS on the page |
+| `eval <js>` | Execute JS on page |
+
+### Legacy CLI (X only, XActions-compatible)
+
+The original `index.js` still works with the full XActions-compatible feature set:
+
+```bash
+node index.js tweet "hello"
+node index.js search "query" 10
+node index.js auto-like "query" 5
+node index.js profile username
+```
+
+See `node index.js help` for all commands.
 
 ## Architecture
 
@@ -113,67 +104,49 @@ node index.js notifications
 Your Chrome (with --remote-debugging-port=9222)
   ↑ CDP (Chrome DevTools Protocol)
   |
-x-puppet (Node.js)
-  ├── index.js  — CLI interface
-  └── shim.js   — Puppeteer API compatibility layer
+puppet (Node.js)
+  ├── puppet.js          — Multi-platform CLI router
+  ├── core/
+  │   └── cdp.js         — Shared: connectToTab, evaluate, sleep
+  ├── platforms/
+  │   ├── x.js           — X/Twitter module
+  │   └── reddit.js      — Reddit module (DOM + JSON API hybrid)
+  ├── index.js           — Legacy X-only CLI (XActions-compatible)
+  └── shim.js            — Puppeteer API compatibility layer
 ```
 
-The shim (`shim.js`) reimplements Puppeteer's `page` API on top of raw CDP. This means:
+### Reddit: Hybrid Approach
 
-1. **XActions compatibility** — Code from XActions' `puppeteer/*.js` runs on the shim with minimal changes
-2. **No Puppeteer dependency** — No headless browser, no stealth plugins
-3. **Your session** — Uses your logged-in Chrome, so X sees a real human
+Reddit uses a dual strategy:
+
+- **Reading** (feed, search, detail): Reddit JSON API via browser `fetch()` — supports pagination, 100+ posts per request
+- **Actions** (upvote, downvote): Direct DOM manipulation through Shadow DOM (`shreddit-post.shadowRoot`)
+- **Home feed**: DOM scraping (personalized feed isn't available via JSON API)
+
+### Adding a New Platform
+
+1. Create `platforms/yoursite.js` with `connect()` and `commands` export
+2. Add it to the `platforms` object in `puppet.js`
+3. Done
 
 ## Using as a Library
 
 ```js
-const { BrowserAutomationShim } = require('./shim');
+// Multi-platform (new)
+const reddit = require('./platforms/reddit');
+const client = await reddit.connect();
+// ... use reddit commands
 
+// XActions-compatible (legacy)
+const { BrowserAutomationShim } = require('./shim');
 const ba = new BrowserAutomationShim();
 const page = await ba.connect();
-
-// Scrape a profile
-const profile = await ba.scrapeProfile(page, 'elonmusk');
-
-// Search and auto-like
-const result = await ba.autoLike(page, {
-  query: 'AI reading',
-  maxLikes: 5,
-});
-
-// Post a comment
-await ba.postComment(page, 'https://x.com/user/status/123', 'Great post!');
-
-await ba.close();
+const profile = await ba.scrapeProfile(page, 'username');
 ```
-
-## XActions Compatibility
-
-The `BrowserAutomationShim` class is a drop-in replacement for XActions' `browserAutomation` module. If XActions adds a new feature, you can port it by:
-
-1. Copy the XActions code
-2. Replace `browserAutomation` with your `BrowserAutomationShim` instance
-3. It works — the shim handles the Puppeteer → CDP translation
-
-## "x" in x-puppet
-
-The "x" is a double meaning:
-- **X** the platform (Twitter)
-- **x** as in "cross" / "any" — the architecture works for any website with DOM automation
-
-The shim pattern can be extended to automate Amazon, YouTube, Gmail, or any site — just add new selectors.
-
-## Rate Limits & Safety
-
-Built-in delays follow XActions' patterns:
-- Like/Follow: 2-5s random delay
-- Every 10 actions: 10-20s pause
-- Comments: 30-60s delay (X is strict on comments)
-- Every 5 comments: 2-3min pause
 
 ## Credits
 
-DOM selectors, rate limit patterns, and automation flows are heavily inspired by [XActions](https://github.com/nirholas/XActions) by [@nichxbt](https://x.com/nichxbt). XActions is a full-featured X automation toolkit built on Puppeteer — go check it out if you want the batteries-included version.
+DOM selectors, rate limit patterns, and automation flows for X/Twitter are inspired by [XActions](https://github.com/nirholas/XActions) by [@nichxbt](https://x.com/nichxbt).
 
 ## License
 

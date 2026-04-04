@@ -4,55 +4,190 @@ async function connect() {
   return connectToTab('reddit.com');
 }
 
-async function feed(client, limit = 5) {
-  const collected = new Map();
-  let scrollAttempts = 0;
-  const maxScrolls = Math.ceil(limit / 3) + 5;
+// --- JSON API helpers ---
 
-  while (collected.size < limit && scrollAttempts < maxScrolls) {
-    const result = await evaluate(client, `
-      (function() {
-        var posts = document.querySelectorAll('shreddit-post');
-        var out = [];
-        for (var i = 0; i < posts.length; i++) {
-          var p = posts[i];
-          out.push({
-            id: p.id,
-            title: p.getAttribute('post-title') || '',
-            score: p.getAttribute('score') || '0',
-            author: p.getAttribute('author') || '',
-            subreddit: p.getAttribute('subreddit-prefixed-name') || '',
-            comments: p.getAttribute('comment-count') || '0',
-            type: p.getAttribute('post-type') || '',
-            permalink: p.getAttribute('permalink') || '',
-            created: p.getAttribute('created-timestamp') || '',
-          });
-        }
-        return JSON.stringify(out);
-      })()
-    `);
-    const posts = JSON.parse(result);
-    const prevSize = collected.size;
-    posts.forEach(p => { if (!collected.has(p.id)) collected.set(p.id, p); });
+async function fetchJSON(client, url) {
+  const result = await evaluate(client, `
+    fetch('${url}', { headers: { 'Accept': 'application/json' } })
+      .then(function(r) { return r.json(); })
+      .then(function(d) { return JSON.stringify(d); })
+  `);
+  return JSON.parse(result);
+}
 
-    if (collected.size >= limit) break;
-    if (collected.size === prevSize) scrollAttempts++;
-    else scrollAttempts = 0;
+function formatPost(data, index) {
+  return {
+    index,
+    id: data.name,
+    title: data.title || '',
+    score: data.score || 0,
+    author: data.author || '',
+    subreddit: data.subreddit_name_prefixed || '',
+    comments: data.num_comments || 0,
+    type: data.post_hint || (data.is_self ? 'text' : 'link'),
+    permalink: data.permalink || '',
+    created: new Date(data.created_utc * 1000).toISOString(),
+    url: data.url || '',
+    selftext: data.selftext || '',
+    domain: data.domain || '',
+    upvoteRatio: data.upvote_ratio || 0,
+  };
+}
 
-    // スクロールして追加読み込み
-    await evaluate(client, 'window.scrollTo(0, document.body.scrollHeight)');
-    await sleep(1500);
+// --- Commands ---
+
+async function feed(client, limit = 5, subreddit = null) {
+  // サブレディット指定 → JSON API (ページネーション対応、大量取得OK)
+  // ホームフィード → DOM (現在表示分のみ)
+  if (subreddit) {
+    return feedJSON(client, limit, subreddit);
   }
 
-  const posts = [...collected.values()].slice(0, limit).map((p, i) => ({ ...p, index: i }));
+  // ホームフィードはまずDOMから取得を試みる
+  const domPosts = await feedDOM(client, limit);
+  return domPosts;
+}
+
+async function feedJSON(client, limit, subreddit) {
+  const posts = [];
+  let after = null;
+
+  while (posts.length < limit) {
+    const batchSize = Math.min(100, limit - posts.length);
+    let url = `https://www.reddit.com/r/${subreddit}.json?limit=${batchSize}`;
+    if (after) url += `&after=${after}`;
+
+    const data = await fetchJSON(client, url);
+    if (!data.data || !data.data.children || data.data.children.length === 0) break;
+
+    data.data.children.forEach(c => {
+      if (posts.length < limit) {
+        posts.push(formatPost(c.data, posts.length));
+      }
+    });
+
+    after = data.data.after;
+    if (!after) break;
+  }
+
+  printPosts(posts);
+  return posts;
+}
+
+async function feedDOM(client, limit) {
+  const result = await evaluate(client, `
+    (function() {
+      var posts = document.querySelectorAll('shreddit-post');
+      var out = [];
+      for (var i = 0; i < posts.length; i++) {
+        var p = posts[i];
+        out.push({
+          id: p.id,
+          title: p.getAttribute('post-title') || '',
+          score: p.getAttribute('score') || '0',
+          author: p.getAttribute('author') || '',
+          subreddit: p.getAttribute('subreddit-prefixed-name') || '',
+          comments: p.getAttribute('comment-count') || '0',
+          type: p.getAttribute('post-type') || '',
+          permalink: p.getAttribute('permalink') || '',
+          created: p.getAttribute('created-timestamp') || '',
+        });
+      }
+      return JSON.stringify(out);
+    })()
+  `);
+  const posts = JSON.parse(result).slice(0, limit).map((p, i) => ({ ...p, index: i }));
+  printPosts(posts);
+  return posts;
+}
+
+function printPosts(posts) {
   console.log(`📜 ${posts.length} posts:`);
   posts.forEach(p => {
     console.log(`  [${p.index}] ⬆${p.score} 💬${p.comments} ${p.subreddit}`);
     console.log(`       ${p.title.slice(0, 80)}`);
     console.log(`       by ${p.author} | ${p.type}`);
   });
+}
+
+async function search(client, query, limit = 10, subreddit = null) {
+  const posts = [];
+  let after = null;
+
+  while (posts.length < limit) {
+    const batchSize = Math.min(100, limit - posts.length);
+    let url = subreddit
+      ? `https://www.reddit.com/r/${subreddit}/search.json?q=${encodeURIComponent(query)}&restrict_sr=on&limit=${batchSize}`
+      : `https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&limit=${batchSize}`;
+    if (after) url += `&after=${after}`;
+
+    const data = await fetchJSON(client, url);
+    if (!data.data || !data.data.children || data.data.children.length === 0) break;
+
+    data.data.children.forEach(c => {
+      if (posts.length < limit) {
+        posts.push(formatPost(c.data, posts.length));
+      }
+    });
+
+    after = data.data.after;
+    if (!after) break;
+  }
+
+  console.log(`🔍 ${posts.length} results for "${query}":`);
+  posts.forEach(p => {
+    console.log(`  [${p.index}] ⬆${p.score} 💬${p.comments} ${p.subreddit}`);
+    console.log(`       ${p.title.slice(0, 80)}`);
+    console.log(`       by ${p.author}`);
+  });
   return posts;
 }
+
+async function postDetail(client, permalink) {
+  // permalink or post ID
+  let url;
+  if (permalink.startsWith('/r/')) {
+    url = `https://www.reddit.com${permalink}.json`;
+  } else if (permalink.startsWith('t3_')) {
+    // IDからURLを構築できないのでJSON APIの info endpoint を使う
+    url = `https://www.reddit.com/api/info.json?id=${permalink}`;
+  } else {
+    url = `https://www.reddit.com/r/${permalink}.json`;
+  }
+
+  const data = await fetchJSON(client, url);
+
+  // commentsエンドポイントは配列を返す [post, comments]
+  if (Array.isArray(data)) {
+    const post = data[0].data.children[0].data;
+    const cmts = data[1].data.children
+      .filter(c => c.kind === 't1')
+      .slice(0, 20)
+      .map((c, i) => ({
+        index: i,
+        author: c.data.author,
+        score: c.data.score,
+        text: (c.data.body || '').slice(0, 200),
+        depth: c.data.depth || 0,
+      }));
+
+    console.log(`📖 ${post.title}`);
+    console.log(`   ${post.subreddit_name_prefixed} | by ${post.author}`);
+    console.log(`   ⬆${post.score} 💬${post.num_comments} | ${post.domain || 'self'}`);
+    if (post.selftext) console.log(`\n   ${post.selftext.slice(0, 300)}`);
+    console.log(`\n💬 ${cmts.length} comments:`);
+    cmts.forEach(c => {
+      const indent = '  '.repeat(c.depth + 1);
+      console.log(`${indent}[${c.index}] ${c.author} (⬆${c.score})`);
+      console.log(`${indent}  ${c.text.slice(0, 100)}`);
+    });
+    return { post: formatPost(post, 0), comments: cmts };
+  }
+
+  return data;
+}
+
+// --- DOM actions (upvote/downvote require browser interaction) ---
 
 async function upvote(client, index = 0) {
   const result = await evaluate(client, `
@@ -99,42 +234,7 @@ async function downvote(client, index = 0) {
 }
 
 async function read(client, index = 0) {
-  const result = await evaluate(client, `
-    (function() {
-      var posts = document.querySelectorAll('shreddit-post');
-      if (!posts[${index}]) return JSON.stringify({ error: 'post not found at index ${index}' });
-      var p = posts[${index}];
-      var attrs = {};
-      for (var j = 0; j < p.attributes.length; j++) {
-        var a = p.attributes[j];
-        if (['post-title','score','author','subreddit-prefixed-name','comment-count',
-             'permalink','post-type','created-timestamp','id','domain'].indexOf(a.name) !== -1) {
-          attrs[a.name] = a.value;
-        }
-      }
-      // テキスト本文があれば取得
-      var textBody = p.querySelector('[slot="text-body"]');
-      if (textBody) attrs['text-body'] = textBody.textContent.trim().substring(0, 500);
-      return JSON.stringify(attrs);
-    })()
-  `);
-  const post = JSON.parse(result);
-  if (post.error) {
-    console.error('❌', post.error);
-    return;
-  }
-  console.log(`📖 ${post['post-title']}`);
-  console.log(`   ${post['subreddit-prefixed-name']} | by ${post.author}`);
-  console.log(`   ⬆${post.score} 💬${post['comment-count']} | ${post['post-type']} | ${post.domain || ''}`);
-  console.log(`   ${post.permalink}`);
-  if (post['text-body']) {
-    console.log(`\n   ${post['text-body'].slice(0, 300)}`);
-  }
-  return post;
-}
-
-async function comments(client, index = 0) {
-  // 投稿のpermalinkに遷移してコメントを読み取る
+  // DOM上の投稿からpermalinkを取得してJSON APIで詳細取得
   const permalink = await evaluate(client, `
     (function() {
       var posts = document.querySelectorAll('shreddit-post');
@@ -146,40 +246,7 @@ async function comments(client, index = 0) {
     console.error('❌ post not found at index', index);
     return;
   }
-
-  const { Page } = client;
-  await Page.enable();
-  await Page.navigate({ url: 'https://www.reddit.com' + permalink });
-  await sleep(3000);
-
-  const result = await evaluate(client, `
-    (function() {
-      var comments = document.querySelectorAll('shreddit-comment');
-      var out = [];
-      for (var i = 0; i < Math.min(comments.length, 20); i++) {
-        var c = comments[i];
-        out.push({
-          index: i,
-          author: c.getAttribute('author') || '',
-          score: c.getAttribute('score') || '0',
-          depth: c.getAttribute('depth') || '0',
-          text: (function() {
-            var tb = c.querySelector('[slot="comment"]');
-            return tb ? tb.textContent.trim().substring(0, 200) : '';
-          })(),
-        });
-      }
-      return JSON.stringify(out);
-    })()
-  `);
-  const cmts = JSON.parse(result);
-  console.log(`💬 ${cmts.length} comments:`);
-  cmts.forEach(c => {
-    const indent = '  '.repeat(parseInt(c.depth) + 1);
-    console.log(`${indent}[${c.index}] ${c.author} (⬆${c.score})`);
-    console.log(`${indent}  ${c.text.slice(0, 100)}`);
-  });
-  return cmts;
+  return postDetail(client, permalink);
 }
 
 async function navigate_(client, path) {
@@ -197,13 +264,14 @@ async function eval_(client, js) {
 }
 
 const commands = {
-  feed:     { fn: (c, args) => feed(c, parseInt(args[0]) || 5),      usage: 'feed [limit]' },
-  upvote:   { fn: (c, args) => upvote(c, parseInt(args[0]) || 0),    usage: 'upvote [index]' },
-  downvote: { fn: (c, args) => downvote(c, parseInt(args[0]) || 0),  usage: 'downvote [index]' },
-  read:     { fn: (c, args) => read(c, parseInt(args[0]) || 0),      usage: 'read [index]' },
-  comments: { fn: (c, args) => comments(c, parseInt(args[0]) || 0),  usage: 'comments [index]' },
-  navigate: { fn: (c, args) => navigate_(c, args.join(' ')),          usage: 'navigate <subreddit>' },
-  eval:     { fn: (c, args) => eval_(c, args.join(' ')),              usage: 'eval <js>' },
+  feed:     { fn: (c, args) => feed(c, parseInt(args[0]) || 5, args[1] || null),  usage: 'feed [limit] [subreddit]' },
+  search:   { fn: (c, args) => search(c, args[0], parseInt(args[1]) || 10),       usage: 'search <query> [limit]' },
+  read:     { fn: (c, args) => read(c, parseInt(args[0]) || 0),                   usage: 'read [index]' },
+  detail:   { fn: (c, args) => postDetail(c, args.join(' ')),                      usage: 'detail <permalink>' },
+  upvote:   { fn: (c, args) => upvote(c, parseInt(args[0]) || 0),                 usage: 'upvote [index]' },
+  downvote: { fn: (c, args) => downvote(c, parseInt(args[0]) || 0),               usage: 'downvote [index]' },
+  navigate: { fn: (c, args) => navigate_(c, args.join(' ')),                       usage: 'navigate <subreddit>' },
+  eval:     { fn: (c, args) => eval_(c, args.join(' ')),                           usage: 'eval <js>' },
 };
 
 module.exports = { connect, commands };
