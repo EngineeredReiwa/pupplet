@@ -217,6 +217,77 @@ async function messages(client, limit = 20) {
   return msgs;
 }
 
+async function search(client, query, limit = 10) {
+  // まず既存の検索をEscで閉じる
+  await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Escape', code: 'Escape' });
+  await sleep(500);
+
+  // Cmd+F でサーバー内検索を開く
+  await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'f', code: 'KeyF', windowsVirtualKeyCode: 70, modifiers: 4 });
+  await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'f', code: 'KeyF', modifiers: 4 });
+  await sleep(1000);
+
+  // 既存テキストをクリア (Cmd+A → Delete)
+  await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 4 });
+  await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 4 });
+  await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+  await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Backspace', code: 'Backspace' });
+  await sleep(300);
+
+  await typeText(client, query);
+  await sleep(500);
+  await pressEnter(client);
+  await sleep(3000);
+
+  // 結果を取得
+  const result = await evaluate(client, `
+    (function() {
+      var panel = document.querySelector('[class*="searchResultsWrap"]');
+      if (!panel) return JSON.stringify({ error: 'search panel not found', results: [] });
+
+      var countEl = panel.querySelector('[class*="searchHeader"]');
+      var countText = countEl ? countEl.textContent.trim() : '';
+      var countMatch = countText.match(/(\\d+)/);
+      var totalCount = countMatch ? parseInt(countMatch[1]) : 0;
+
+      var items = panel.querySelectorAll('[class*="searchResult__"]');
+      var out = [];
+      items.forEach(function(item, i) {
+        if (i >= ${limit}) return;
+        var authorEl = item.querySelector('[class*="username_"]');
+        var contentEl = item.querySelector('[id^="message-content-"]');
+        var timeEl = item.querySelector('time');
+        out.push({
+          index: i,
+          author: authorEl ? authorEl.textContent.trim() : '',
+          text: contentEl ? contentEl.textContent.trim().substring(0, 300) : '',
+          time: timeEl ? timeEl.getAttribute('datetime') : '',
+        });
+      });
+      return JSON.stringify({ totalCount: totalCount, results: out });
+    })()
+  `);
+  const data = JSON.parse(result);
+  if (data.error) {
+    console.error('❌', data.error);
+    return data;
+  }
+
+  console.log(`🔍 ${data.totalCount} total hits for "${query}" (${data.results.length} shown):`);
+  data.results.forEach(r => {
+    const time = r.time ? new Date(r.time).toLocaleDateString() : '';
+    console.log(`  [${r.index}] ${r.author} (${time})`);
+    console.log(`       ${r.text.slice(0, 100)}`);
+  });
+
+  // Escで検索パネルを閉じる
+  await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Escape', code: 'Escape' });
+
+  return data;
+}
+
 async function send(client, text) {
   // メッセージ入力欄にテキストを入力して送信
   await evaluate(client, `
@@ -280,6 +351,7 @@ const commands = {
   join:     { fn: (c, args) => joinServer(c, parseInt(args[0]) || 0),                   usage: 'join [index]' },
   channels: { fn: (c, args) => channels(c),                                             usage: 'channels' },
   goto:     { fn: (c, args) => goto_(c, args.join(' ')),                                 usage: 'goto <channel-name|index>' },
+  search:   { fn: (c, args) => search(c, args[0], parseInt(args[1]) || 10),             usage: 'search <query> [limit]' },
   messages: { fn: (c, args) => messages(c, parseInt(args[0]) || 20),                    usage: 'messages [limit]' },
   send:     { fn: (c, args) => send(c, args.join(' ')),                                 usage: 'send <text>' },
   navigate: { fn: (c, args) => navigate_(c, args.join(' ')),                             usage: 'navigate <path>' },
