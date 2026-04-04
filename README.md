@@ -8,7 +8,8 @@ No API keys. No Puppeteer. No new browser. Just your Chrome.
 | Platform | Read | Actions | Method |
 |----------|------|---------|--------|
 | **X / Twitter** | Timeline, profile, search, followers | Tweet, like, reply, follow | DOM |
-| **Reddit** | Feed, search, post detail, comments | Upvote, downvote | DOM + JSON API |
+| **Reddit** | Feed, search, post detail, comments | Upvote, downvote, comment | DOM + JSON API |
+| **Discord** | Server discovery, channels, messages | Join server, send messages | DOM + CDP Input |
 
 ## Why?
 
@@ -65,6 +66,13 @@ node puppet.js reddit navigate books        # r/books に移動
 node puppet.js x timeline 5                 # タイムライン
 node puppet.js x tweet "Hello!"             # ツイート
 node puppet.js x like 0                     # いいね
+
+# --- Discord ---
+node puppet.js discord discover "light novel" 10  # サーバー検索
+node puppet.js discord join 0                     # サーバー参加
+node puppet.js discord channels                   # チャンネル一覧
+node puppet.js discord messages 20                # メッセージ読み取り
+node puppet.js discord send "Hello!"              # メッセージ送信
 ```
 
 ## Commands
@@ -93,6 +101,18 @@ node puppet.js x like 0                     # いいね
 | `notifications [limit]` | Read notifications |
 | `timeline [limit]` | Read timeline |
 | `navigate <path>` | Go to x.com/\<path\> |
+| `eval <js>` | Execute JS on page |
+
+### puppet discord
+
+| Command | Description |
+|---------|-------------|
+| `discover [query] [limit]` | Search servers on Discord Discovery |
+| `join [index]` | Join server from discovery results |
+| `channels` | List channels in current server |
+| `messages [limit]` | Read recent messages in current channel |
+| `send <text>` | Send a message to current channel |
+| `navigate <path>` | Navigate to Discord path |
 | `eval <js>` | Execute JS on page |
 
 ### Legacy CLI (X only, XActions-compatible)
