@@ -5,29 +5,46 @@ async function connect() {
 }
 
 async function feed(client, limit = 5) {
-  const result = await evaluate(client, `
-    (function() {
-      var posts = document.querySelectorAll('shreddit-post');
-      var out = [];
-      for (var i = 0; i < Math.min(posts.length, ${limit}); i++) {
-        var p = posts[i];
-        out.push({
-          index: i,
-          id: p.id,
-          title: p.getAttribute('post-title') || '',
-          score: p.getAttribute('score') || '0',
-          author: p.getAttribute('author') || '',
-          subreddit: p.getAttribute('subreddit-prefixed-name') || '',
-          comments: p.getAttribute('comment-count') || '0',
-          type: p.getAttribute('post-type') || '',
-          permalink: p.getAttribute('permalink') || '',
-          created: p.getAttribute('created-timestamp') || '',
-        });
-      }
-      return JSON.stringify(out);
-    })()
-  `);
-  const posts = JSON.parse(result);
+  const collected = new Map();
+  let scrollAttempts = 0;
+  const maxScrolls = Math.ceil(limit / 3) + 5;
+
+  while (collected.size < limit && scrollAttempts < maxScrolls) {
+    const result = await evaluate(client, `
+      (function() {
+        var posts = document.querySelectorAll('shreddit-post');
+        var out = [];
+        for (var i = 0; i < posts.length; i++) {
+          var p = posts[i];
+          out.push({
+            id: p.id,
+            title: p.getAttribute('post-title') || '',
+            score: p.getAttribute('score') || '0',
+            author: p.getAttribute('author') || '',
+            subreddit: p.getAttribute('subreddit-prefixed-name') || '',
+            comments: p.getAttribute('comment-count') || '0',
+            type: p.getAttribute('post-type') || '',
+            permalink: p.getAttribute('permalink') || '',
+            created: p.getAttribute('created-timestamp') || '',
+          });
+        }
+        return JSON.stringify(out);
+      })()
+    `);
+    const posts = JSON.parse(result);
+    const prevSize = collected.size;
+    posts.forEach(p => { if (!collected.has(p.id)) collected.set(p.id, p); });
+
+    if (collected.size >= limit) break;
+    if (collected.size === prevSize) scrollAttempts++;
+    else scrollAttempts = 0;
+
+    // スクロールして追加読み込み
+    await evaluate(client, 'window.scrollTo(0, document.body.scrollHeight)');
+    await sleep(1500);
+  }
+
+  const posts = [...collected.values()].slice(0, limit).map((p, i) => ({ ...p, index: i }));
   console.log(`📜 ${posts.length} posts:`);
   posts.forEach(p => {
     console.log(`  [${p.index}] ⬆${p.score} 💬${p.comments} ${p.subreddit}`);

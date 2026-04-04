@@ -4,7 +4,8 @@
   "description": "Multi-platform DOM automation via Chrome DevTools Protocol. No API keys needed.",
   "main": "index.js",
   "bin": {
-    "puppet": "./index.js"
+    "puppet": "./puppet.js",
+    "x-puppet": "./index.js"
   },
   "scripts": {
     "start": "node index.js"
