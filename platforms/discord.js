@@ -233,6 +233,34 @@ async function send(client, text) {
   console.log('✉️  sent:', text.slice(0, 60));
 }
 
+async function goto_(client, channelName) {
+  // チャンネル名またはインデックスでSPA遷移
+  const index = parseInt(channelName);
+  const result = await evaluate(client, `
+    (function() {
+      var items = document.querySelectorAll('[data-dnd-name]');
+      var target = null;
+      for (var i = 0; i < items.length; i++) {
+        var name = items[i].getAttribute('data-dnd-name') || '';
+        if (${!isNaN(index)} && i === ${index || 0}) { target = items[i]; break; }
+        if (name.toLowerCase().indexOf(${JSON.stringify(String(channelName).toLowerCase())}) !== -1) { target = items[i]; break; }
+      }
+      if (!target) return JSON.stringify({ error: 'channel not found' });
+      var link = target.querySelector('a');
+      if (link) { link.click(); return JSON.stringify({ ok: true, name: target.getAttribute('data-dnd-name') }); }
+      target.click();
+      return JSON.stringify({ ok: true, name: target.getAttribute('data-dnd-name') });
+    })()
+  `);
+  const res = JSON.parse(result);
+  if (res.ok) {
+    await sleep(2000);
+    console.log('📂 switched to:', res.name);
+  } else {
+    console.error('❌', res.error);
+  }
+}
+
 async function navigate_(client, path) {
   const { Page } = client;
   await Page.enable();
@@ -251,6 +279,7 @@ const commands = {
   discover: { fn: (c, args) => discover(c, args[0] || null, parseInt(args[1]) || 10),  usage: 'discover [query] [limit]' },
   join:     { fn: (c, args) => joinServer(c, parseInt(args[0]) || 0),                   usage: 'join [index]' },
   channels: { fn: (c, args) => channels(c),                                             usage: 'channels' },
+  goto:     { fn: (c, args) => goto_(c, args.join(' ')),                                 usage: 'goto <channel-name|index>' },
   messages: { fn: (c, args) => messages(c, parseInt(args[0]) || 20),                    usage: 'messages [limit]' },
   send:     { fn: (c, args) => send(c, args.join(' ')),                                 usage: 'send <text>' },
   navigate: { fn: (c, args) => navigate_(c, args.join(' ')),                             usage: 'navigate <path>' },
