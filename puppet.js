@@ -8,10 +8,12 @@
 // Platforms:
 //   x        - X/Twitter
 //   reddit   - Reddit
+//   discord  - Discord
 
 const platforms = {
   x: () => require('./platforms/x'),
   reddit: () => require('./platforms/reddit'),
+  discord: () => require('./platforms/discord'),
 };
 
 function showHelp() {
