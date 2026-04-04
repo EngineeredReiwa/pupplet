@@ -142,6 +142,44 @@ async function navigate(client, path) {
   console.log('🔗 navigated to:', path);
 }
 
+async function replyTo(client, url, text) {
+  const { Page } = client;
+  await Page.enable();
+  const tweetUrl = url.startsWith('http') ? url : 'https://x.com/' + url;
+  await Page.navigate({ url: tweetUrl });
+  await sleep(3000);
+
+  // Click reply button on the tweet detail page
+  const clicked = await evaluate(client, `
+    (function() {
+      var btn = document.querySelector('[data-testid="reply"]');
+      if (btn) { btn.click(); return 'ok'; }
+      return 'not_found';
+    })()
+  `);
+  if (clicked === 'not_found') {
+    console.error('❌ reply button not found on', tweetUrl);
+    return;
+  }
+  await sleep(1000);
+
+  await evaluate(client, `
+    const editor = document.querySelector('[data-testid="tweetTextarea_0"]');
+    editor.focus();
+    document.execCommand('insertText', false, ${JSON.stringify(text)});
+    editor.dispatchEvent(new Event('input', { bubbles: true }));
+  `);
+  await sleep(500);
+
+  await evaluate(client, `
+    document.querySelector('[data-testid="tweetButton"]').click();
+  `);
+  await sleep(1500);
+
+  console.log('💬 replied to:', tweetUrl);
+  console.log('   text:', text.slice(0, 80) + (text.length > 80 ? '...' : ''));
+}
+
 async function eval_(client, js) {
   const result = await evaluate(client, js);
   console.log(result);
@@ -152,6 +190,7 @@ const commands = {
   like:          { fn: (c, args) => like(c, parseInt(args[0]) || 0),            usage: 'like [index]' },
   unlike:        { fn: (c, args) => unlike(c, parseInt(args[0]) || 0),          usage: 'unlike [index]' },
   reply:         { fn: (c, args) => reply(c, args.slice(0, -1).join(' ') || args[0], parseInt(args[args.length - 1]) || 0), usage: 'reply <text> [index]' },
+  'reply-to':    { fn: (c, args) => replyTo(c, args[0], args.slice(1).join(' ')), usage: 'reply-to <tweet-url> <text>' },
   notifications: { fn: (c, args) => notifications(c, parseInt(args[0]) || 10),  usage: 'notifications [limit]' },
   timeline:      { fn: (c, args) => timeline(c, parseInt(args[0]) || 5),        usage: 'timeline [limit]' },
   navigate:      { fn: (c, args) => navigate(c, args[0]),                       usage: 'navigate <path>' },

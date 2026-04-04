@@ -258,6 +258,71 @@ async function navigate_(client, path) {
   console.log('🔗 navigated to:', path);
 }
 
+async function comment(client, permalink, text) {
+  const { Page } = client;
+  await Page.enable();
+  const url = permalink.startsWith('http')
+    ? permalink
+    : 'https://www.reddit.com' + (permalink.startsWith('/') ? permalink : '/' + permalink);
+  await Page.navigate({ url });
+  await sleep(3000);
+
+  // Find and click the comment textbox (role="textbox" with placeholder)
+  const opened = await evaluate(client, `
+    (function() {
+      var editor = document.querySelector('[role="textbox"][class*="cursor-text"]');
+      if (editor) { editor.click(); editor.focus(); return 'found'; }
+      var fallback = document.querySelector('[role="textbox"]');
+      if (fallback) { fallback.click(); fallback.focus(); return 'found'; }
+      return 'not_found';
+    })()
+  `);
+
+  if (opened === 'not_found') {
+    console.error('❌ comment box not found on', url);
+    return;
+  }
+  await sleep(500);
+
+  // Type the comment text
+  await evaluate(client, `
+    (function() {
+      var editor = document.querySelector('[role="textbox"][class*="cursor-text"]')
+        || document.querySelector('[role="textbox"]');
+      if (editor) {
+        editor.focus();
+        document.execCommand('insertText', false, ${JSON.stringify(text)});
+        editor.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    })()
+  `);
+  await sleep(500);
+
+  // Click the submit button (「コメント」or "Comment")
+  const submitted = await evaluate(client, `
+    (function() {
+      var btns = document.querySelectorAll('button[type="submit"]');
+      for (var i = 0; i < btns.length; i++) {
+        var t = btns[i].textContent.trim();
+        if (t === 'コメント' || t === 'Comment' || t === 'comment' || t === 'Reply' || t === 'reply') {
+          btns[i].click();
+          return 'ok';
+        }
+      }
+      return 'not_found';
+    })()
+  `);
+
+  if (submitted === 'not_found') {
+    console.error('❌ submit button not found');
+    return;
+  }
+  await sleep(2000);
+
+  console.log('💬 commented on:', url);
+  console.log('   text:', text.slice(0, 80) + (text.length > 80 ? '...' : ''));
+}
+
 async function eval_(client, js) {
   const result = await evaluate(client, js);
   console.log(result);
@@ -270,6 +335,7 @@ const commands = {
   detail:   { fn: (c, args) => postDetail(c, args.join(' ')),                      usage: 'detail <permalink>' },
   upvote:   { fn: (c, args) => upvote(c, parseInt(args[0]) || 0),                 usage: 'upvote [index]' },
   downvote: { fn: (c, args) => downvote(c, parseInt(args[0]) || 0),               usage: 'downvote [index]' },
+  comment:  { fn: (c, args) => comment(c, args[0], args.slice(1).join(' ')),        usage: 'comment <permalink> <text>' },
   navigate: { fn: (c, args) => navigate_(c, args.join(' ')),                       usage: 'navigate <subreddit>' },
   eval:     { fn: (c, args) => eval_(c, args.join(' ')),                           usage: 'eval <js>' },
 };

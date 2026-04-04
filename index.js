@@ -115,6 +115,15 @@ Prereq: Chrome must be running with --remote-debugging-port=9222
         break;
       }
 
+      case 'comment': {
+        const url = args[1];
+        const text = args[2];
+        if (!url || !text) { console.error('Usage: comment <tweet_url> <text>'); break; }
+        const result = await ba.postComment(page, url, text);
+        console.log(result.success ? `💬 commented: ${text.slice(0, 60)}` : `❌ ${result.error}`);
+        break;
+      }
+
       case 'follow': {
         const username = args[1];
         if (!username) { console.error('Usage: follow <username>'); break; }
@@ -172,7 +181,7 @@ Prereq: Chrome must be running with --remote-debugging-port=9222
         const tweets = await ba.scrapeTweets(page, username, limit);
         console.log(`📜 ${tweets.length} tweets from @${username}:`);
         tweets.forEach(t => {
-          console.log(`  [${t.timestamp?.slice(0, 10)}] ❤️${t.likes} 🔄${t.retweets}`);
+          console.log(`  [${t.timestamp?.slice(0, 10)}] ❤️${t.likes} 🔄${t.retweets} ${t.url || ''}`);
           console.log(`    ${t.text?.slice(0, 80)}`);
         });
         break;
@@ -213,7 +222,7 @@ Prereq: Chrome must be running with --remote-debugging-port=9222
         const tweets = await ba.searchTweets(page, query, limit);
         console.log(`🔍 ${tweets.length} results for "${query}":`);
         tweets.forEach(t => {
-          console.log(`  @${t.username} [${t.timestamp?.slice(0, 10)}]`);
+          console.log(`  @${t.username} [${t.timestamp?.slice(0, 10)}] ${t.url || ''}`);
           console.log(`    ${t.text?.slice(0, 80)}`);
         });
         break;

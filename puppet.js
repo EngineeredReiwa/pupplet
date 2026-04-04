@@ -14,6 +14,7 @@ const platforms = {
   x: () => require('./platforms/x'),
   reddit: () => require('./platforms/reddit'),
   discord: () => require('./platforms/discord'),
+  note: () => require('./platforms/note'),
 };
 
 function showHelp() {
