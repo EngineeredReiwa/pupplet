@@ -99,6 +99,7 @@ node puppet.js discord send "Hello!"              # Send message
 node puppet.js note feed 10                 # Read feed
 node puppet.js note search "keyword" 10     # Search articles
 node puppet.js note suki 0                  # Like article
+node puppet.js note post article.md         # Post article from markdown
 ```
 
 ## Commands
@@ -149,6 +150,7 @@ node puppet.js note suki 0                  # Like article
 | `feed [limit]` | Read note.com feed |
 | `search <query> [limit]` | Search articles |
 | `suki [index]` | Like (suki) an article |
+| `post <markdown-file>` | Create article from markdown (styled: headings, bold, lists, code, quotes) |
 | `navigate <path>` | Navigate to note.com path |
 
 ## Architecture
