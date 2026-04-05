@@ -246,6 +246,47 @@ async function channels(client) {
   return chs;
 }
 
+// チャンネルの topic (説明文/ルール) を取得
+// ハニーポット系チャンネル(例: "do NOT send a message") の警告文もここに書かれていることが多い
+async function topic(client) {
+  try {
+    await requireState(client, ['in_channel', 'server_no_channel']);
+  } catch (e) { return; }
+  const result = await evaluate(client, `
+    (function() {
+      // チャンネルヘッダーの topic
+      var topicEl = document.querySelector('[class*="topic_"]');
+      var topic = topicEl ? topicEl.textContent.trim() : '';
+
+      // チャンネル名
+      var nameEl = document.querySelector('[class*="title_"] h1, [class*="channelName"]')
+        || document.querySelector('header h1')
+        || document.querySelector('header [class*="title_"]');
+      var name = nameEl ? nameEl.textContent.trim() : '';
+
+      // メンバー数 / オンライン数 (あれば)
+      return JSON.stringify({
+        name: name.substring(0, 80),
+        topic: topic.substring(0, 1000),
+      });
+    })()
+  `);
+  const data = JSON.parse(result);
+  console.log(`📋 #${data.name}`);
+  if (data.topic) {
+    console.log(`   ${data.topic}`);
+
+    // ハニーポット/禁止系の警告を目立たせる
+    const red = /(do NOT send|スパム|spam|禁止|forbidden|banned|honeypot)/i;
+    if (red.test(data.topic)) {
+      console.log(`\n⚠️  WARNING: このチャンネルに投稿すると問題がある可能性があります`);
+    }
+  } else {
+    console.log(`   (no topic set)`);
+  }
+  return data;
+}
+
 async function messages(client, limit = 20) {
   try {
     await requireState(client, 'in_channel');
@@ -432,6 +473,7 @@ const commands = {
   join:     { fn: (c, args) => joinServer(c, parseInt(args[0]) || 0),                   usage: 'join [index]' },
   channels: { fn: (c, args) => channels(c),                                             usage: 'channels' },
   goto:     { fn: (c, args) => goto_(c, args.join(' ')),                                 usage: 'goto <channel-name|index>' },
+  topic:    { fn: (c, args) => topic(c),                                                 usage: 'topic (read current channel rules/description)' },
   search:   { fn: (c, args) => search(c, args[0], parseInt(args[1]) || 10, args[2] || null), usage: 'search <query> [limit] [channel]' },
   messages: { fn: (c, args) => messages(c, parseInt(args[0]) || 20),                    usage: 'messages [limit]' },
   send:     { fn: (c, args) => send(c, args.join(' ')),                                 usage: 'send <text>' },
