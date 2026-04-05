@@ -544,6 +544,249 @@ async function send(client, text) {
   console.log('✉️  sent:', text.slice(0, 60));
 }
 
+// 指定セレクタの要素を物理マウスクリック (.click() では発火しないReactハンドラ対策)
+async function physicalClick(client, selectorExpression) {
+  const posJson = await evaluate(client, `
+    (function() {
+      var el = ${selectorExpression};
+      if (!el) return JSON.stringify({ error: 'not_found' });
+      var r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return JSON.stringify({ error: 'zero_size' });
+      return JSON.stringify({ x: r.x + r.width/2, y: r.y + r.height/2 });
+    })()
+  `);
+  const pos = JSON.parse(posJson);
+  if (pos.error) return { ok: false, error: pos.error };
+
+  await client.Input.dispatchMouseEvent({ type: 'mouseMoved', x: pos.x, y: pos.y });
+  await sleep(50);
+  await client.Input.dispatchMouseEvent({ type: 'mousePressed', x: pos.x, y: pos.y, button: 'left', clickCount: 1 });
+  await client.Input.dispatchMouseEvent({ type: 'mouseReleased', x: pos.x, y: pos.y, button: 'left', clickCount: 1 });
+  return { ok: true, x: pos.x, y: pos.y };
+}
+
+// 指定ユーザーのプロフィールからDMを開き、メッセージをドラフト入力する
+// (送信はしない - 安全のため必ず人間が目視確認してからEnter)
+//
+// フロー (ユーザー手動操作で観察したもの):
+//   1. チャンネル内のそのユーザーのメッセージを探し、アバター要素を物理クリック
+//   2. プロフィール popout 内の「その他」ボタン (aria-label="その他") をクリック
+//   3. オーバーフローメニューの「プロフィール全体を表示」をクリック
+//   4. フルプロフィールモーダル内の「メッセージ」ボタンをクリック
+//   5. URL が /channels/@me/<dmChannelId> に変わったのを確認
+//   6. DM入力欄 ([role="textbox"][aria-label^="@"]) にテキストをドラフト入力
+async function dm(client, targetName, message) {
+  if (!targetName) {
+    console.error('❌ Usage: dm <user-display-name> [message]');
+    return;
+  }
+  try {
+    await requireState(client, 'in_channel');
+  } catch (e) { return; }
+
+  // 前の popout/modal が残っていたらEscで閉じる (複数回)
+  for (let i = 0; i < 3; i++) {
+    await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await sleep(200);
+  }
+
+  console.log(`🔍 "${targetName}" のメッセージを探しています...`);
+
+  // 対象ユーザーのメッセージ内のアバター要素を見つけて、画面中央にスクロール
+  // (そのままだとヘッダーに隠れる可能性がある)
+  const found = await evaluate(client, `
+    (function() {
+      var msgs = document.querySelectorAll('[id^="chat-messages-"]');
+      var target = ${JSON.stringify(targetName.toLowerCase())};
+      for (var i = 0; i < msgs.length; i++) {
+        var u = msgs[i].querySelector('[class*="username_"]');
+        var name = u ? u.textContent.trim().toLowerCase() : '';
+        if (name === target || name.indexOf(target) !== -1) {
+          var av = msgs[i].querySelector('img[class*="avatar"]');
+          if (!av) return JSON.stringify({ error: 'avatar_not_found' });
+          av.scrollIntoView({ block: 'center', behavior: 'instant' });
+          return JSON.stringify({ ok: true, matchedName: name });
+        }
+      }
+      return JSON.stringify({ error: 'user_not_in_channel' });
+    })()
+  `);
+  const foundData = JSON.parse(found);
+  if (foundData.error) {
+    console.error(`❌ "${targetName}" のメッセージが現在のチャンネルに見つかりません (${foundData.error})`);
+    console.error('   このチャンネルに該当ユーザーの発言が必要です');
+    return;
+  }
+  console.log(`  ✓ 発見: ${foundData.matchedName}`);
+  await sleep(500); // スクロール反映待ち
+
+  // Step 1: アバターを物理クリック (スクロール後の新座標で)
+  const step1 = await physicalClick(client, `
+    (function() {
+      var msgs = document.querySelectorAll('[id^="chat-messages-"]');
+      var target = ${JSON.stringify(targetName.toLowerCase())};
+      for (var i = 0; i < msgs.length; i++) {
+        var u = msgs[i].querySelector('[class*="username_"]');
+        var name = u ? u.textContent.trim().toLowerCase() : '';
+        if (name === target || name.indexOf(target) !== -1) {
+          return msgs[i].querySelector('img[class*="avatar"]');
+        }
+      }
+      return null;
+    })()
+  `);
+  if (!step1.ok) {
+    console.error('❌ アバターの物理クリックに失敗:', step1.error);
+    return;
+  }
+  // クリック位置にヘッダー等が被ってないか確認
+  const topEl = await evaluate(client, `
+    (function() {
+      var el = document.elementFromPoint(${step1.x}, ${step1.y});
+      return el ? (el.tagName + '|' + (el.className || '').substring(0, 40)) : 'none';
+    })()
+  `);
+  console.log(`  ✓ アバタークリック (${Math.round(step1.x)}, ${Math.round(step1.y)}) topEl=${topEl}`);
+  await sleep(2500);
+
+  // Step 2: popout の「その他」ボタン (aria-label="その他" or "More")
+  // popout の生成を最大5秒待つ
+  let step2 = null;
+  for (let i = 0; i < 10; i++) {
+    step2 = await physicalClick(client, `
+      document.querySelector('[role="button"][aria-label="その他"]') ||
+      document.querySelector('[role="button"][aria-label="More"]') ||
+      document.querySelector('[class*="bannerButton"][role="button"]')
+    `);
+    if (step2.ok) break;
+    await sleep(500);
+  }
+  if (!step2 || !step2.ok) {
+    // デバッグ用: 今DOMに何があるか
+    const debug = await evaluate(client, `
+      (function() {
+        var popouts = document.querySelectorAll('[class*="userPopout"], [class*="userProfile"], [class*="popout"], [role="dialog"]');
+        var btns = [];
+        document.querySelectorAll('[role="button"][aria-label]').forEach(function(b) {
+          var al = b.getAttribute('aria-label') || '';
+          if (al.length < 40) btns.push(al);
+        });
+        return JSON.stringify({ popouts: popouts.length, ariaLabels: [...new Set(btns)].slice(0, 20) });
+      })()
+    `);
+    console.error('❌ プロフィール popout の「その他」ボタンが見つかりません');
+    console.error('   debug:', debug);
+    return;
+  }
+  console.log('  ✓ 「その他」をクリック');
+  await sleep(1500);
+
+  // Step 3: オーバーフローメニューの「プロフィール全体を表示」
+  // id + text の両方をリトライ
+  let step3 = null;
+  for (let i = 0; i < 8; i++) {
+    step3 = await physicalClick(client, `
+      (function() {
+        // id match
+        var byId = document.querySelector('#user-profile-overflow-menu-view-profile');
+        if (byId) return byId;
+        // text match (複数言語対応)
+        var items = document.querySelectorAll('[role="menuitem"]');
+        for (var i = 0; i < items.length; i++) {
+          var t = items[i].textContent.trim();
+          if (t === 'プロフィール全体を表示' || t === 'View Full Profile' || t === 'Ver perfil completo') return items[i];
+        }
+        return null;
+      })()
+    `);
+    if (step3.ok) break;
+    await sleep(500);
+  }
+  if (!step3 || !step3.ok) {
+    // デバッグ: メニュー項目を表示
+    const debug = await evaluate(client, `
+      (function() {
+        var items = [];
+        document.querySelectorAll('[role="menuitem"]').forEach(function(m) {
+          items.push(m.textContent.trim().substring(0, 40));
+        });
+        return JSON.stringify({ menuItems: items });
+      })()
+    `);
+    console.error('❌ 「プロフィール全体を表示」メニューが見つかりません');
+    console.error('   debug:', debug);
+    return;
+  }
+  console.log('  ✓ 「プロフィール全体を表示」をクリック');
+  await sleep(2000);
+
+  // Step 4: フルプロフィール内の「メッセージ」ボタン
+  const step4 = await physicalClick(client, `
+    document.querySelector('button[role="button"][aria-label="メッセージ"], button[role="button"][aria-label="Message"]')
+  `);
+  if (!step4.ok) {
+    console.error('❌ 「メッセージ」ボタンが見つかりません (DM が無効化されている可能性があります)');
+    return;
+  }
+  console.log('  ✓ 「メッセージ」ボタンをクリック');
+  await sleep(2500);
+
+  // Step 5: URL が /channels/@me/ に遷移したか確認
+  const urlCheck = await evaluate(client, 'location.href');
+  if (!urlCheck.includes('/channels/@me/')) {
+    console.error('❌ DM への遷移に失敗しました');
+    console.error('   current url:', urlCheck);
+    return;
+  }
+  console.log('  ✓ DM へ遷移:', urlCheck);
+
+  // Step 6: DM入力欄にフォーカスしてドラフト入力
+  // aria-label は "@<実username> へメッセージを送信" 形式
+  const focusRes = await evaluate(client, `
+    (function() {
+      var editor = document.querySelector('[role="textbox"][aria-label^="@"]');
+      if (!editor) return JSON.stringify({ error: 'input_not_found' });
+      editor.focus();
+      return JSON.stringify({
+        ok: true,
+        ariaLabel: editor.getAttribute('aria-label'),
+      });
+    })()
+  `);
+  const focus = JSON.parse(focusRes);
+  if (focus.error) {
+    console.error('❌ DM入力欄が見つかりません');
+    return;
+  }
+  console.log(`  ✓ 入力欄にフォーカス: ${focus.ariaLabel}`);
+
+  if (!message) {
+    console.log('\nℹ️  ドラフトなし。DM画面を開いた状態で停止しました');
+    console.log('   メッセージを送るには: puppet discord dm "' + targetName + '" "<text>"');
+    return { opened: true, url: urlCheck, ariaLabel: focus.ariaLabel };
+  }
+
+  // テキストをドラフト入力 (送信しない)
+  await sleep(300);
+  await typeText(client, message);
+  await sleep(500);
+
+  const draftCheck = await evaluate(client, `
+    (function() {
+      var editor = document.querySelector('[role="textbox"][aria-label^="@"]');
+      return editor ? editor.textContent.trim().substring(0, 200) : '';
+    })()
+  `);
+  console.log(`\n📝 ドラフト入力完了:`);
+  console.log(`   "${draftCheck}"`);
+  console.log(`\n⚠️  メッセージはまだ送信されていません。`);
+  console.log('   ブラウザで内容を確認し、問題なければ手動で Enter を押すか、');
+  console.log('   `puppet discord dm-send` で送信できます (未実装)');
+
+  return { opened: true, drafted: draftCheck, url: urlCheck };
+}
+
 async function goto_(client, channelName) {
   // チャンネル名またはインデックスでSPA遷移
   const index = parseInt(channelName);
@@ -596,6 +839,7 @@ const commands = {
   search:   { fn: (c, args) => search(c, args[0], parseInt(args[1]) || 10, args[2] || null), usage: 'search <query> [limit] [channel]' },
   messages: { fn: (c, args) => messages(c, parseInt(args[0]) || 20),                    usage: 'messages [limit]' },
   send:     { fn: (c, args) => send(c, args.join(' ')),                                 usage: 'send <text>' },
+  dm:       { fn: (c, args) => dm(c, args[0], args.slice(1).join(' ') || null),          usage: 'dm <display-name> [message]  (draft only, does NOT send)' },
   navigate: { fn: (c, args) => navigate_(c, args.join(' ')),                             usage: 'navigate <path>' },
   eval:     { fn: (c, args) => eval_(c, args.join(' ')),                                 usage: 'eval <js>' },
 };
