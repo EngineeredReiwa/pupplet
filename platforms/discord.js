@@ -25,6 +25,49 @@ async function pressEnter(client) {
   await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
 }
 
+// 現在のDiscordページが何の状態か判定
+// 返り値: 'in_channel' | 'no_access' | 'server_no_channel' | 'discovery' | 'home' | 'unknown'
+async function detectState(client) {
+  const state = await evaluate(client, `
+    (function() {
+      var t = document.body.textContent || '';
+      // 権限なし/認証必要画面
+      if (t.indexOf('テキストチャンネルがありません') !== -1) return 'no_access';
+      if (t.indexOf("don't have access to any text channels") !== -1) return 'no_access';
+      if (t.indexOf('No Text Channels') !== -1 && t.indexOf('wrong place') !== -1) return 'no_access';
+      // チャンネル表示中 (メッセージリストがある)
+      if (document.querySelector('[data-list-id="chat-messages"]')) return 'in_channel';
+      // Discoveryページ
+      if (document.querySelectorAll('[class*="card__84e3e"]').length > 0) return 'discovery';
+      // サーバーに入ってるがチャンネル未選択 (サイドバーにチャンネルリストはある)
+      if (document.querySelectorAll('[data-dnd-name]').length > 0) return 'server_no_channel';
+      // DM/Home画面
+      if (location.pathname === '/channels/@me' || location.pathname.startsWith('/channels/@me/')) return 'home';
+      return 'unknown';
+    })()
+  `);
+  return state;
+}
+
+async function requireState(client, expectedStates, actionHint) {
+  const state = await detectState(client);
+  const expected = Array.isArray(expectedStates) ? expectedStates : [expectedStates];
+  if (expected.includes(state)) return state;
+
+  const hints = {
+    no_access: '❌ このサーバーの認証が必要です。verify-here チャンネルで認証するか、別のサーバーに移動してください',
+    server_no_channel: 'ℹ️  サーバーに入りましたが、まだチャンネルが開かれていません。`puppet discord goto <channel>` でチャンネルを開いてください',
+    discovery: 'ℹ️  現在 Discovery ページです。`puppet discord join <index>` でサーバーに入るか、`puppet discord goto` でチャンネルを開いてください',
+    home: 'ℹ️  DM/ホーム画面です。サーバーに移動してください',
+    unknown: '⚠️  現在の状態が判定できませんでした',
+  };
+  console.error(hints[state] || hints.unknown);
+  if (actionHint) console.error('   ' + actionHint);
+  const err = new Error('state_mismatch: ' + state);
+  err.state = state;
+  throw err;
+}
+
 function parseServerCard(text, name) {
   // "ServerNameDescription123人がオンライン456人" をパース
   var desc = text;
@@ -204,6 +247,9 @@ async function channels(client) {
 }
 
 async function messages(client, limit = 20) {
+  try {
+    await requireState(client, 'in_channel');
+  } catch (e) { return; }
   const result = await evaluate(client, `
     (function() {
       var msgs = document.querySelectorAll('[id^="chat-messages-"]');
@@ -233,7 +279,15 @@ async function messages(client, limit = 20) {
   return msgs;
 }
 
-async function search(client, query, limit = 10) {
+async function search(client, query, limit = 10, channelFilter = null) {
+  try {
+    await requireState(client, 'in_channel');
+  } catch (e) { return; }
+
+  // channelFilter が指定されていれば `in:#channel-name` フィルタを付加
+  // Discordの検索は "keyword in:channel-name" の形式でチャンネル絞り込みできる
+  const fullQuery = channelFilter ? `${query} in:${channelFilter.replace(/^#/, '')}` : query;
+
   // まず既存の検索をEscで閉じる
   await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
   await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Escape', code: 'Escape' });
@@ -244,14 +298,21 @@ async function search(client, query, limit = 10) {
   await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'f', code: 'KeyF', modifiers: 4 });
   await sleep(1000);
 
-  // 既存テキストをクリア (Cmd+A → Delete)
-  await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 4 });
-  await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 4 });
-  await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
-  await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Backspace', code: 'Backspace' });
-  await sleep(300);
+  // 既存テキストを Backspace で1文字ずつクリア
+  const existingValue = await evaluate(client, `
+    (function() {
+      var input = document.activeElement;
+      return (input && input.value) || '';
+    })()
+  `);
+  for (let i = 0; i < existingValue.length; i++) {
+    await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+    await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Backspace', code: 'Backspace' });
+    await sleep(20);
+  }
+  await sleep(200);
 
-  await typeText(client, query);
+  await typeText(client, fullQuery);
   await sleep(500);
   await pressEnter(client);
   await sleep(3000);
@@ -290,7 +351,8 @@ async function search(client, query, limit = 10) {
     return data;
   }
 
-  console.log(`🔍 ${data.totalCount} total hits for "${query}" (${data.results.length} shown):`);
+  const label = channelFilter ? `"${query}" in #${channelFilter.replace(/^#/, '')}` : `"${query}"`;
+  console.log(`🔍 ${data.totalCount} total hits for ${label} (${data.results.length} shown):`);
   data.results.forEach(r => {
     const time = r.time ? new Date(r.time).toLocaleDateString() : '';
     console.log(`  [${r.index}] ${r.author} (${time})`);
@@ -305,6 +367,9 @@ async function search(client, query, limit = 10) {
 }
 
 async function send(client, text) {
+  try {
+    await requireState(client, 'in_channel');
+  } catch (e) { return; }
   // メッセージ入力欄にテキストを入力して送信
   await evaluate(client, `
     (function() {
@@ -367,7 +432,7 @@ const commands = {
   join:     { fn: (c, args) => joinServer(c, parseInt(args[0]) || 0),                   usage: 'join [index]' },
   channels: { fn: (c, args) => channels(c),                                             usage: 'channels' },
   goto:     { fn: (c, args) => goto_(c, args.join(' ')),                                 usage: 'goto <channel-name|index>' },
-  search:   { fn: (c, args) => search(c, args[0], parseInt(args[1]) || 10),             usage: 'search <query> [limit]' },
+  search:   { fn: (c, args) => search(c, args[0], parseInt(args[1]) || 10, args[2] || null), usage: 'search <query> [limit] [channel]' },
   messages: { fn: (c, args) => messages(c, parseInt(args[0]) || 20),                    usage: 'messages [limit]' },
   send:     { fn: (c, args) => send(c, args.join(' ')),                                 usage: 'send <text>' },
   navigate: { fn: (c, args) => navigate_(c, args.join(' ')),                             usage: 'navigate <path>' },
