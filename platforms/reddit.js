@@ -661,6 +661,89 @@ async function submit(client, subreddit, filePath) {
   setTimeout(() => process.exit(0), 500);
 }
 
+// --- Delete existing post ---
+//
+// Clicks the delete link on the author's own post, then confirms via the "yes" link
+// that appears. old.reddit.com uses a two-step confirmation flow.
+
+async function deletePost(client, postUrl) {
+  if (!postUrl) {
+    console.error('❌ Usage: pupplet reddit deletePost <post-url>');
+    return;
+  }
+
+  const oldUrl = postUrl.replace(/https?:\/\/(?:www\.|old\.)?reddit\.com/, 'https://old.reddit.com');
+  console.log(`🗑️  Deleting: ${oldUrl}`);
+
+  const CDP = require('chrome-remote-interface');
+  const port = parseInt(process.env.CDP_PORT || '9222');
+
+  const tmpClient = await CDP({ port });
+  await tmpClient.Target.createTarget({ url: oldUrl });
+  await tmpClient.close();
+  await sleep(3500);
+
+  const targets = await CDP.List({ port });
+  const tab = targets.find(
+    (t) => t.type === 'page' && t.url.includes('old.reddit.com') && t.url.includes('/comments/'),
+  );
+  if (!tab) {
+    console.error('❌ Post tab not found');
+    return;
+  }
+
+  const c = await CDP({ port, target: tab });
+  await c.Runtime.enable();
+  await sleep(1000);
+
+  // Click the "delete" link (no class, find by text)
+  const clickDelete = await evaluate(
+    c,
+    `(() => {
+      const post = document.querySelector('#siteTable .link.self') || document.querySelector('#siteTable .link');
+      if (!post) return 'NO_POST';
+      const buttons = post.querySelector('.flat-list.buttons');
+      if (!buttons) return 'NO_BUTTONS';
+      const deleteLink = Array.from(buttons.querySelectorAll('a')).find(
+        (a) => a.textContent.trim() === 'delete'
+      );
+      if (!deleteLink) return 'NO_DELETE_LINK';
+      deleteLink.click();
+      return 'CLICKED';
+    })()`,
+  );
+  if (clickDelete !== 'CLICKED') {
+    console.error(`❌ Could not click delete: ${clickDelete}`);
+    await c.close();
+    return;
+  }
+  console.log('🗑️  Delete clicked, confirming...');
+  await sleep(500);
+
+  // Confirmation flow: after clicking delete, a "yes"/"no" pair appears next to it
+  const clickYes = await evaluate(
+    c,
+    `(() => {
+      const post = document.querySelector('#siteTable .link.self') || document.querySelector('#siteTable .link');
+      const buttons = post.querySelector('.flat-list.buttons');
+      const yesLink = Array.from(buttons.querySelectorAll('a')).find(
+        (a) => a.textContent.trim() === 'yes'
+      );
+      if (!yesLink) return 'NO_YES_LINK';
+      yesLink.click();
+      return 'CLICKED_YES';
+    })()`,
+  );
+  if (clickYes !== 'CLICKED_YES') {
+    console.error(`❌ Could not confirm: ${clickYes}`);
+    await c.close();
+    return;
+  }
+  console.log('✅ Post deleted');
+
+  setTimeout(() => process.exit(0), 500);
+}
+
 // --- Edit existing post ---
 //
 // Edits the body of an existing self-post. Takes the same markdown format as submit
@@ -709,15 +792,20 @@ async function editPost(client, postUrl, filePath) {
   await c.Runtime.enable();
   await sleep(1500);
 
-  // Click the "edit" button on the main post
+  // Click the "edit" button on the main post.
+  // old.reddit.com's edit link has no distinguishing class — find by text content.
   const clickResult = await evaluate(
     c,
     `(() => {
       const post = document.querySelector('#siteTable .link.self') || document.querySelector('#siteTable .link');
       if (!post) return 'NO_POST';
-      const editBtn = post.querySelector('.flat-list.buttons .edit-btn a') || post.querySelector('a.edit-btn') || post.querySelector('li.edit-btn > a');
-      if (!editBtn) return 'NO_EDIT_BTN';
-      editBtn.click();
+      const buttons = post.querySelector('.flat-list.buttons');
+      if (!buttons) return 'NO_BUTTONS';
+      const editLink = Array.from(buttons.querySelectorAll('a')).find(
+        (a) => a.textContent.trim() === 'edit'
+      );
+      if (!editLink) return 'NO_EDIT_BTN';
+      editLink.click();
       return 'CLICKED';
     })()`,
   );
@@ -821,6 +909,7 @@ const commands = {
   clear:    { fn: (c, args) => clear(c),                                           usage: 'clear' },
   submit:   { fn: (c, args) => submit(c, args[0], args[1]),                         usage: 'submit <subreddit> <markdown-file>' },
   edit:     { fn: (c, args) => editPost(c, args[0], args[1]),                       usage: 'edit <post-url> <markdown-file>' },
+  deletePost: { fn: (c, args) => deletePost(c, args[0]),                             usage: 'deletePost <post-url>' },
   navigate: { fn: (c, args) => navigate_(c, args.join(' ')),                       usage: 'navigate <subreddit>' },
   eval:     { fn: (c, args) => eval_(c, args.join(' ')),                           usage: 'eval <js>' },
 };
